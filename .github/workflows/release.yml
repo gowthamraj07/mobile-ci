@@ -1,0 +1,383 @@
+name: CMP Release (reusable)
+
+# Reusable release workflow for Compose Multiplatform apps: one run versions both
+# platforms identically. A `version` job resolves/creates the shared vX.Y.Z tag, then
+# `android` (Google Play, via Gradle Play Publisher) and `ios` (TestFlight, via fastlane)
+# build in parallel from that same version.
+#
+# Call it from an app repo (see README.md):
+#
+#   jobs:
+#     release:
+#       permissions:
+#         contents: write
+#       uses: gowthamraj07/mobile-ci/.github/workflows/release.yml@v1
+#       with:
+#         track: ${{ inputs.track || 'internal' }}
+#         versionName: ${{ inputs.versionName }}
+#       secrets: inherit
+#
+# Conventions the caller app must follow (all overridable via inputs):
+#   - Android module named `composeApp`, reading -PappVersionCode / -PappVersionName
+#     and publishing via GPP behind -PenablePlayPublisher (see the app's build.gradle.kts).
+#   - iOS fastlane project under `iosApp/` exposing a `beta` lane that honours the
+#     BUILD_NUMBER and MARKETING_VERSION env vars.
+on:
+  workflow_call:
+    inputs:
+      android-module:
+        description: Gradle module that produces the AAB.
+        type: string
+        default: composeApp
+      ios-directory:
+        description: Directory holding the iOS fastlane project.
+        type: string
+        default: iosApp
+      java-version:
+        type: string
+        default: "17"
+      ruby-version:
+        type: string
+        default: "3.3"
+      track:
+        description: Play track to publish to.
+        type: string
+        default: internal
+      versionName:
+        description: versionName override (e.g. 1.4.0); blank = auto-bump the patch.
+        type: string
+        default: ""
+    secrets:
+      RELEASE_KEYSTORE_B64: { required: false }
+      RELEASE_STORE_PASSWORD: { required: false }
+      RELEASE_KEY_ALIAS: { required: false }
+      RELEASE_KEY_PASSWORD: { required: false }
+      PLAY_SERVICE_ACCOUNT_JSON: { required: false }
+      MATCH_GIT_URL: { required: false }
+      MATCH_PASSWORD: { required: false }
+      MATCH_GIT_BASIC_AUTHORIZATION: { required: false }
+      APP_STORE_CONNECT_API_KEY_ID: { required: false }
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID: { required: false }
+      APP_STORE_CONNECT_API_KEY_P8: { required: false }
+      APPLE_TEAM_ID: { required: false }
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Single source of truth for the version. Both platform jobs consume its
+  # outputs, so Android and iOS can never drift apart. The github context here
+  # reflects the CALLER's triggering event (tag push vs. workflow_dispatch).
+  # ---------------------------------------------------------------------------
+  version:
+    name: Resolve version & tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push the release tag
+    outputs:
+      name: ${{ steps.version.outputs.name }}
+      code: ${{ steps.version.outputs.code }}
+      tag: ${{ steps.version.outputs.tag }}
+      build: ${{ steps.version.outputs.build }}
+      ios_ready: ${{ steps.publish.outputs.ios }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # full tag history — the version fallback reads the latest tag
+
+      # Resolve versionName, then derive everything from it:
+      #   - tag push (v1.4.3)                → 1.4.3
+      #   - manual dispatch + versionName    → the value you type
+      #   - manual dispatch, no versionName  → latest tag with the patch bumped (v1.4.2 → 1.4.3)
+      # Android versionCode = major*10000 + minor*100 + patch (1.4.3 → 10403): deterministic
+      # per version and monotonic across releases, so it always exceeds the live Play code
+      # and can't regress ("does not allow any existing users to upgrade"). Constraints:
+      # minor < 100 and patch < 100. iOS build number is the run number (unique per version).
+      - name: Compute version
+        id: version
+        env:
+          # Passed via env (not inline ${{ }}) so a crafted input can't inject shell.
+          VERSION_NAME_INPUT: ${{ inputs.versionName }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$VERSION_NAME_INPUT" ]; then
+            NAME="$VERSION_NAME_INPUT"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            NAME="${GITHUB_REF_NAME#v}"
+          else
+            # No version supplied: bump the patch of the highest existing vX.Y.Z tag.
+            LATEST="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+            LATEST="${LATEST#v}"
+            IFS='.' read -r LMAJOR LMINOR LPATCH <<< "${LATEST%%-*}"
+            NAME="${LMAJOR:-0}.${LMINOR:-0}.$(( ${LPATCH:-0} + 1 ))"
+          fi
+          # Strip any pre-release/build suffix (e.g. 1.4.0-rc1 → 1.4.0) before parsing.
+          CORE="${NAME%%-*}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE"
+          CODE=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))
+          echo "code=${CODE}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NAME}" >> "$GITHUB_OUTPUT"
+          echo "build=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "Releasing versionName=${NAME} tag=v${NAME} androidCode=${CODE} iosBuild=${GITHUB_RUN_NUMBER}"
+
+      # Per-platform publishability. `ios` gates the iOS job so it's cleanly SKIPPED
+      # (not failed) until the Apple credentials exist — Android still releases. The
+      # combined flag decides whether a manual release should create a tag (a pure
+      # dry-run must not pollute the tag history).
+      - name: Detect publishability
+        id: publish
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ANDROID=false; IOS=false
+          if [ -n "$RELEASE_KEYSTORE_B64" ] && [ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]; then ANDROID=true; fi
+          if [ -n "$MATCH_GIT_URL" ] && [ -n "$MATCH_PASSWORD" ] && [ -n "$APP_STORE_CONNECT_API_KEY_ID" ] \
+             && [ -n "$APP_STORE_CONNECT_API_KEY_ISSUER_ID" ] && [ -n "$APP_STORE_CONNECT_API_KEY_P8" ] \
+             && [ -n "$APPLE_TEAM_ID" ]; then IOS=true; fi
+          echo "android=$ANDROID" >> "$GITHUB_OUTPUT"
+          echo "ios=$IOS" >> "$GITHUB_OUTPUT"
+          [ "$IOS" = "true" ] || echo "::warning::Apple release secrets not set — the iOS job will be skipped (Android still releases). Add them to ship iOS at the same version."
+
+      # For a manual dispatch that will actually publish, create + push the release tag
+      # so the shipped version maps 1:1 to a git tag. Skipped for tag pushes (already
+      # exists) and dry-runs. Pushing with the default GITHUB_TOKEN does NOT re-trigger
+      # the caller — the android/ios jobs below run in THIS run via `needs`, so no
+      # cross-workflow trigger (and no PAT) is needed.
+      - name: Create release tag
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && (steps.publish.outputs.android == 'true' || steps.publish.outputs.ios == 'true')
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists — bump the version or delete the tag."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+  # ---------------------------------------------------------------------------
+  # Android → Google Play (Gradle Play Publisher). Builds always; publishes only
+  # when both a real keystore and Play credentials are present.
+  # ---------------------------------------------------------------------------
+  android:
+    name: Android → Play
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub release + upload the AAB
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      # If the keystore secret is present, decode it and expose the signing config to
+      # Gradle as ORG_GRADLE_PROJECT_* env vars. Absent → debug-signed dry-run.
+      - name: Configure release signing
+        id: signing
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$RELEASE_KEYSTORE_B64" ]; then
+            echo "$RELEASE_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+            # Heredoc delimiters so a password/alias containing '=' or newlines
+            # can't corrupt the env file.
+            {
+              echo "ORG_GRADLE_PROJECT_RELEASE_STORE_FILE=$RUNNER_TEMP/release.keystore"
+              echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD<<__EOF__"
+              echo "$RELEASE_STORE_PASSWORD"
+              echo "__EOF__"
+              echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS<<__EOF__"
+              echo "$RELEASE_KEY_ALIAS"
+              echo "__EOF__"
+              echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD<<__EOF__"
+              echo "$RELEASE_KEY_PASSWORD"
+              echo "__EOF__"
+            } >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::RELEASE_KEYSTORE_B64 not set — building a DEBUG-signed, unpublishable AAB (dry-run)."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build release bundle
+        run: >-
+          ./gradlew :${{ inputs.android-module }}:bundleRelease
+          -PappVersionCode=${{ needs.version.outputs.code }}
+          -PappVersionName=${{ needs.version.outputs.name }}
+          --stacktrace
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-aab
+          path: ${{ inputs.android-module }}/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+
+      # Write the Play service-account JSON if the secret exists (GPP reads
+      # play-service-account.json at repo root).
+      - name: Configure Play credentials
+        id: play
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > play-service-account.json
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::PLAY_SERVICE_ACCOUNT_JSON not set — skipping Play upload."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Publish only when we have both a real signature and Play credentials.
+      - name: Publish App Bundle to Play
+        if: steps.signing.outputs.signed == 'true' && steps.play.outputs.available == 'true'
+        run: >-
+          ./gradlew :${{ inputs.android-module }}:publishReleaseBundle
+          -PenablePlayPublisher
+          -PplayTrack=${{ inputs.track }}
+          -PappVersionCode=${{ needs.version.outputs.code }}
+          -PappVersionName=${{ needs.version.outputs.name }}
+          --stacktrace
+
+      - name: Clean up Play credentials
+        if: always()
+        run: rm -f play-service-account.json
+
+      # Create the GitHub release for the shipped tag (pushed tag, or the one the
+      # version job created for a manual publish) and attach the AAB.
+      - name: Create GitHub Release
+        if: >-
+          github.ref_type == 'tag'
+          || (steps.signing.outputs.signed == 'true' && steps.play.outputs.available == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            ${{ inputs.android-module }}/build/outputs/bundle/release/*.aab \
+            --title "$GITHUB_REPOSITORY_OWNER ${GITHUB_REPOSITORY#*/} $TAG" \
+            --generate-notes
+
+  # ---------------------------------------------------------------------------
+  # iOS → TestFlight (fastlane: match → gym → pilot). Skipped (not failed) until
+  # the Apple credentials exist; Android releases regardless.
+  # ---------------------------------------------------------------------------
+  ios:
+    name: iOS → TestFlight
+    needs: version
+    if: needs.version.outputs.ios_ready == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Fail fast with a readable message if the Apple secrets aren't set, instead of
+      # letting match/gym error deep in the build. (The job only runs when the core
+      # secrets are present; this also catches the HTTPS match-repo auth nuance.)
+      - name: Verify Apple credentials are present
+        env:
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for v in MATCH_GIT_URL MATCH_PASSWORD APP_STORE_CONNECT_API_KEY_ID \
+                   APP_STORE_CONNECT_API_KEY_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8 APPLE_TEAM_ID; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          # HTTPS match repos also need MATCH_GIT_BASIC_AUTHORIZATION; SSH (git@) don't.
+          case "$MATCH_GIT_URL" in
+            https://*) [ -z "$MATCH_GIT_BASIC_AUTHORIZATION" ] && missing="$missing MATCH_GIT_BASIC_AUTHORIZATION" ;;
+          esac
+          if [ -n "$missing" ]; then
+            echo "::error::Missing iOS release secrets:$missing. Nothing to publish."
+            exit 1
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      # Newest stable Xcode on the runner. Pin to a concrete version if you later need
+      # byte-reproducible archives.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      - name: Cache Konan
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      - name: Set up Ruby + bundler
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ inputs.ruby-version }}
+          bundler-cache: true
+          working-directory: ${{ inputs.ios-directory }}
+
+      - name: fastlane ios beta (match → gym → pilot)
+        working-directory: ${{ inputs.ios-directory }}
+        env:
+          CI: "true"
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          BUILD_NUMBER: ${{ needs.version.outputs.build }}
+          MARKETING_VERSION: ${{ needs.version.outputs.name }}
+        run: bundle exec fastlane ios beta
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ios-build-logs
+          if-no-files-found: ignore
+          path: |
+            ~/Library/Logs/gym/
+            ${{ inputs.ios-directory }}/fastlane/report.xml
