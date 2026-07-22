@@ -1,7 +1,9 @@
 # mobile-ci
 
-Shared CI for my Compose Multiplatform apps. Currently one reusable workflow:
-**`release.yml`** — a single run that ships **iOS and Android at the same version**.
+Shared CI for my Compose Multiplatform apps. Reusable workflows:
+- **`release.yml`** — a single run that ships **iOS and Android at the same version**.
+- **`sync-listing.yml`** — push the **Google Play store listing** (icon, feature
+  graphic, screenshots, listing text) on demand, decoupled from releases.
 
 - `version` job resolves/creates the shared `vX.Y.Z` tag (source of truth for both platforms).
 - `android` job → Google Play via Gradle Play Publisher, and attaches the AAB to a GitHub Release.
@@ -54,6 +56,43 @@ Pin `@v1` (a tag in this repo) so upstream changes never surprise an app; bump t
 | Dispatch, versionName blank | latest tag + patch | created by CI |
 
 The iOS job is **skipped, not failed,** until the Apple secrets exist — Android still releases.
+
+## Sync the Play store listing (`sync-listing.yml`)
+
+Push store *graphics and text* to Google Play, decoupled from binary releases —
+run it on demand when the brand assets change. It uploads whatever the app has
+committed under Gradle Play Publisher's convention
+`<module>/src/main/play/listings/<locale>/…` via the `publishListing` task
+(missing files are skipped). Because Play rate-limits listing edits and GPP
+re-uploads all graphics each run, this is intentionally separate from `release.yml`.
+
+Add `.github/workflows/sync-store-assets.yml` to the app repo:
+
+```yaml
+name: Sync store assets
+on:
+  workflow_dispatch:
+jobs:
+  sync:
+    uses: gowthamraj07/mobile-ci/.github/workflows/sync-listing.yml@v1
+    secrets: inherit             # needs PLAY_SERVICE_ACCOUNT_JSON
+```
+
+App layout (generate the images with `mobile-brand-kit`):
+
+```
+composeApp/src/main/play/listings/en-US/graphics/
+├── icon/icon.png                       # 512×512, 32-bit (alpha OK)
+├── feature-graphic/feature-graphic.png # 1024×500, opaque (no alpha)
+└── phone-screenshots/1.png 2.png …
+```
+
+Inputs: `android-module` (default `composeApp`), `java-version` (default `17`).
+Secret: `PLAY_SERVICE_ACCOUNT_JSON` (the same one `release.yml` uses).
+
+> The **App Store** icon isn't uploaded here — it ships inside the iOS binary's
+> asset catalog via `release.yml`. App Store *screenshots* would go through
+> fastlane `deliver` (not yet wired).
 
 ## Inputs
 

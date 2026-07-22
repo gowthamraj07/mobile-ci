@@ -1,0 +1,87 @@
+name: Play listing sync (reusable)
+
+# Reusable workflow to push a CMP app's Google Play *store listing* — graphics
+# (hi-res icon, feature graphic, screenshots) and any listing text — to Play,
+# decoupled from binary releases. Graphics are re-uploaded on every run and Play
+# rate-limits listing edits, so this is deliberately NOT part of release.yml:
+# call it on demand (workflow_dispatch) when the store assets change.
+#
+# It uploads whatever the app has committed under Gradle Play Publisher's
+# convention `<module>/src/main/play/listings/<locale>/…` via the `publishListing`
+# task. Absent files are simply skipped by GPP.
+#
+# Call it from an app repo:
+#
+#   on:
+#     workflow_dispatch:
+#   jobs:
+#     sync:
+#       uses: gowthamraj07/mobile-ci/.github/workflows/sync-listing.yml@v1
+#       secrets: inherit
+#
+# Conventions the caller app must follow (overridable via inputs):
+#   - Android module named `composeApp`, applying Gradle Play Publisher behind
+#     -PenablePlayPublisher (same as release.yml). The app must already exist on
+#     Play (this edits the listing; it does not create the app).
+on:
+  workflow_call:
+    inputs:
+      android-module:
+        description: Gradle module that owns the Play listing.
+        type: string
+        default: composeApp
+      java-version:
+        type: string
+        default: "17"
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON:
+        description: JSON of the Play service account (listing edit permission).
+        required: false
+
+jobs:
+  sync:
+    name: Sync Play listing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Fail fast with a readable message rather than a deep GPP auth error.
+      - name: Verify Play credentials are present
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON not set — nothing to publish. Add it to the app repo's secrets."
+            exit 1
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: true
+
+      # GPP reads play-service-account.json at repo root (same as release.yml).
+      - name: Configure Play credentials
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > play-service-account.json
+
+      - name: Publish listing (graphics + text) to Play
+        run: >-
+          ./gradlew :${{ inputs.android-module }}:publishListing
+          -PenablePlayPublisher
+          --stacktrace
+
+      - name: Clean up Play credentials
+        if: always()
+        run: rm -f play-service-account.json
