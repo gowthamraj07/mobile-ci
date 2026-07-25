@@ -1,6 +1,8 @@
 # mobile-ci
 
 Shared CI for my Compose Multiplatform apps. Reusable workflows:
+- **`pr-check.yml`** — build gate for every PR/push: detekt, lint, unit +
+  screenshot tests, assemble, and a two-tier iOS check.
 - **`release.yml`** — a single run that ships **iOS and Android at the same version**.
 - **`sync-listing.yml`** — push the **Google Play store listing** (icon, feature
   graphic, screenshots, listing text) on demand, decoupled from releases.
@@ -56,6 +58,67 @@ Pin `@v1` (a tag in this repo) so upstream changes never surprise an app; bump t
 | Dispatch, versionName blank | latest tag + patch | created by CI |
 
 The iOS job is **skipped, not failed,** until the Apple secrets exist — Android still releases.
+
+## PR checks (`pr-check.yml`)
+
+Build-verify every PR and every push to the long-lived branches, identically across
+apps. Two jobs matter:
+
+- **`build`** (ubuntu) — `detekt` → Android `lintDebug` → `testDebugUnitTest` +
+  Roborazzi `verifyRoborazziDebug` → `assembleDebug` → compile the iOS simulator
+  target's Kotlin **and its test sources** (klib/metadata). The iOS compile catches
+  `iosMain`/`iosTest` breakage without a macOS runner.
+- **`ios-check`** (macOS) — the full `xcodebuild` link. macOS minutes bill **10x**, so
+  a cheap `changes` job (`dorny/paths-filter`) gates it: on PRs it runs only when an
+  iOS-affecting path changed; a push to the default branch or a manual dispatch always
+  runs it (the mainline never skips iOS).
+
+Add `.github/workflows/pr-check.yml` to the app repo:
+
+```yaml
+name: PR check
+
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-check:
+    permissions:
+      contents: read
+      packages: read          # resolve the shared version catalog (GitHub Packages)
+      pull-requests: read       # dorny/paths-filter reads the PR file list
+    uses: gowthamraj07/mobile-ci/.github/workflows/pr-check.yml@v1
+    with:
+      default-branch: main      # set to `master` if that's your mainline
+    secrets: inherit             # passes GITHUB_TOKEN through for catalog auth
+```
+
+The `permissions` block is the ceiling for the reusable jobs — omit `packages: read`
+and catalog resolution 401s; omit `pull-requests: read` and the path filter can't read
+the PR. Keep `concurrency` in the caller so superseded runs cancel per ref.
+
+### Inputs
+
+| Input | Default | Purpose |
+|---|---|---|
+| `android-module` | `composeApp` | Module that builds/tests the app |
+| `ios-directory` | `iosApp` | iOS dir the path filter watches |
+| `ios-project` | `iosApp/iosApp.xcodeproj` | `.xcodeproj` the macOS job builds |
+| `ios-scheme` | `iosApp` | Xcode scheme |
+| `java-version` | `17` | Temurin JDK |
+| `xcode-version` | `latest-stable` | Xcode on the macOS runner |
+| `default-branch` | `main` | Owns the caches; pushes to it always run iOS |
+| `run-detekt` | `true` | Run `./gradlew detekt` |
+
+Assumes the fleet-standard **direct-framework** iOS integration (no CocoaPods) — the
+macOS job builds the `.xcodeproj` directly. CocoaPods-based apps aren't supported yet.
 
 ## Sync the Play store listing (`sync-listing.yml`)
 

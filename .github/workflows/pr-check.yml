@@ -1,0 +1,231 @@
+name: CMP PR check (reusable)
+
+# Reusable PR/build-verification workflow for Compose Multiplatform apps. One place
+# to own the fleet's build gate so every app verifies identically and fixes land once.
+#
+# Two-tier iOS strategy keeps macOS minutes (billed 10x) cheap:
+#   - the ubuntu `build` job compiles the iOS simulator target's Kotlin (klib/metadata)
+#     on every run — catches iosMain / iosTest breakage without a macOS runner;
+#   - the macOS `ios-check` job does the full xcodebuild link, but only when an
+#     iOS-affecting path changed (PRs) — pushes to the default branch and manual
+#     dispatches always run it.
+#
+# Call it from an app repo (see README.md):
+#
+#   jobs:
+#     pr-check:
+#       permissions:
+#         contents: read
+#         packages: read        # resolve the shared version catalog (GitHub Packages)
+#         pull-requests: read    # dorny/paths-filter reads the PR file list
+#       uses: gowthamraj07/mobile-ci/.github/workflows/pr-check.yml@v1
+#       secrets: inherit          # passes GITHUB_TOKEN through for catalog auth
+#
+# Conventions the caller app follows (all overridable via inputs):
+#   - Android module named `composeApp`, with :lintDebug / :testDebugUnitTest /
+#     :verifyRoborazziDebug / :assembleDebug tasks (the fleet baseline).
+#   - iOS project at `iosApp/iosApp.xcodeproj`, scheme `iosApp`, built directly
+#     (no CocoaPods — the fleet-standard direct-framework integration).
+on:
+  workflow_call:
+    inputs:
+      android-module:
+        description: Gradle module that builds/tests the app.
+        type: string
+        default: composeApp
+      ios-directory:
+        description: Directory holding the iOS Xcode project (used by the path filter).
+        type: string
+        default: iosApp
+      ios-project:
+        description: Path to the .xcodeproj to build on macOS.
+        type: string
+        default: iosApp/iosApp.xcodeproj
+      ios-scheme:
+        description: Xcode scheme to build.
+        type: string
+        default: iosApp
+      java-version:
+        type: string
+        default: "17"
+      xcode-version:
+        description: Xcode to select on the macOS runner.
+        type: string
+        default: latest-stable
+      default-branch:
+        description: >-
+          Long-lived branch that owns the caches. The Gradle dependency cache is only
+          written from this branch (PRs read-only), and pushes to it always run the
+          full iOS build.
+        type: string
+        default: main
+      run-detekt:
+        description: Run `./gradlew detekt` (static analysis + ktlint-style formatting).
+        type: boolean
+        default: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Cheap ubuntu job: does this change touch the iOS build surface? Gates the
+  # expensive macOS job so it only runs when it must (on PRs).
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect iOS-affecting changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Filter paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Built from the module/dir inputs so a renamed module keeps working.
+          filters: |
+            ios:
+              - '${{ inputs.ios-directory }}/**'
+              - '${{ inputs.android-module }}/src/commonMain/**'
+              - '${{ inputs.android-module }}/src/iosMain/**'
+              - '${{ inputs.android-module }}/build.gradle.kts'
+              - 'settings.gradle.kts'
+              - 'gradle/**'
+              - '.github/workflows/**'
+
+  # ---------------------------------------------------------------------------
+  # Ubuntu build gate: static analysis, lint, unit + screenshot tests, assemble,
+  # and the cheap iOS klib compile (incl. iOS test sources).
+  # ---------------------------------------------------------------------------
+  build:
+    name: Lint · detekt · unit + screenshot tests · assemble · iOS compile
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read   # resolve the shared version catalog from gowthamraj07/mobile-deps
+    timeout-minutes: 45
+    # Gradle authenticates to GitHub Packages via the settings.gradle.kts env
+    # fallback: GITHUB_ACTOR is a default Actions var; GITHUB_TOKEN is mapped here.
+    # NOTE: the CALLER must grant `packages: read`, or this token is capped to none.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          # Only write the dependency cache from the default branch to keep it clean.
+          cache-read-only: ${{ github.ref != format('refs/heads/{0}', inputs.default-branch) }}
+
+      # Kotlin/Native compiler + platform libs live outside the Gradle cache.
+      - name: Cache Konan
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('settings.gradle.kts', format('{0}/build.gradle.kts', inputs.android-module)) }}
+          restore-keys: konan-${{ runner.os }}-
+
+      - name: detekt (static analysis + ktlint-style formatting)
+        if: ${{ inputs.run-detekt }}
+        run: ./gradlew detekt --stacktrace
+
+      - name: Android Lint
+        run: ./gradlew :${{ inputs.android-module }}:lintDebug --stacktrace
+
+      - name: Unit tests + Roborazzi screenshot verification
+        run: ./gradlew :${{ inputs.android-module }}:testDebugUnitTest :${{ inputs.android-module }}:verifyRoborazziDebug --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew :${{ inputs.android-module }}:assembleDebug --stacktrace
+
+      # ubuntu can't link an iOS binary; compiling the simulator target's Kotlin
+      # (klib/metadata) catches iosMain breakage cheaply. Full build → ios-check.
+      - name: Compile iOS (klib / metadata)
+        run: ./gradlew :${{ inputs.android-module }}:compileKotlinIosSimulatorArm64 --stacktrace
+
+      # Also compile the iOS TEST sources — catches native-only breakage the
+      # JVM/Android unit-test compile misses (e.g. Kotlin/Native-illegal
+      # identifiers like commas in backtick test names).
+      - name: Compile iOS test sources (klib / metadata)
+        run: ./gradlew :${{ inputs.android-module }}:compileTestKotlinIosSimulatorArm64 --stacktrace
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: reports
+          if-no-files-found: ignore
+          path: |
+            ${{ inputs.android-module }}/build/reports/
+            ${{ inputs.android-module }}/build/outputs/roborazzi/
+            ${{ inputs.android-module }}/build/test-results/
+
+  # ---------------------------------------------------------------------------
+  # Full iOS build + link on macOS. Catches Swift-side and framework-link breakage
+  # the ubuntu klib compile can't. macOS minutes bill 10x, so on PRs this runs only
+  # when the `changes` job flags an iOS-affecting path — but a push to the default
+  # branch or a manual dispatch always runs it (never let the mainline skip iOS).
+  # No signing.
+  # ---------------------------------------------------------------------------
+  ios-check:
+    name: iOS build (simulator, unsigned)
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' || github.event_name != 'pull_request' }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+      packages: read   # resolve the shared version catalog from gowthamraj07/mobile-deps
+    timeout-minutes: 45
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Newest stable Xcode on the runner. macos-latest's default can lag the SDK
+      # Apple requires for uploads; pin to a concrete version if you need
+      # byte-reproducible archives.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ inputs.xcode-version }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+        with:
+          cache-read-only: ${{ github.ref != format('refs/heads/{0}', inputs.default-branch) }}
+
+      - name: Cache Konan
+        uses: actions/cache@v5
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('settings.gradle.kts', format('{0}/build.gradle.kts', inputs.android-module)) }}
+          restore-keys: konan-${{ runner.os }}-
+
+      # Builds the shared Kotlin framework (via the "Compile Kotlin Framework" build
+      # phase → embedAndSignAppleFrameworkForXcode) and the Swift wrapper. No signing.
+      - name: Build iOS app for simulator
+        run: >-
+          xcodebuild build
+          -project ${{ inputs.ios-project }}
+          -scheme ${{ inputs.ios-scheme }}
+          -configuration Debug
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
