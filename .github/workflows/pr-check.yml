@@ -254,7 +254,9 @@ jobs:
       # Builds the shared Kotlin framework (via the "Compile Kotlin Framework" build
       # phase → embedAndSignAppleFrameworkForXcode) and the Swift wrapper. No signing.
       # Builds the .xcworkspace when ios-workspace is set (CocoaPods/SPM-workspace),
-      # otherwise the .xcodeproj.
+      # otherwise the .xcodeproj. ARCHS=arm64: the runners are Apple Silicon, so we
+      # skip the x86_64 simulator slice — faster, and avoids "Unknown iOS simulator
+      # arch: 'x86_64'" for apps whose K/N framework only declares iosSimulatorArm64.
       - name: Build iOS app for simulator
         env:
           IOS_WORKSPACE: ${{ inputs.ios-workspace }}
@@ -271,4 +273,5 @@ jobs:
             -scheme "$IOS_SCHEME" \
             -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
+            ARCHS=arm64 \
             CODE_SIGNING_ALLOWED=NO
