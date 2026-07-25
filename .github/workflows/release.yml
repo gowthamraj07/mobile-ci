@@ -70,6 +70,10 @@ on:
       MATCH_GIT_URL: { required: false }
       MATCH_PASSWORD: { required: false }
       MATCH_GIT_BASIC_AUTHORIZATION: { required: false }
+      # SSH private key for match repos accessed over git@/ssh:// (alternative to the
+      # HTTPS MATCH_GIT_BASIC_AUTHORIZATION). When set, an ssh-agent is started before
+      # fastlane. Unset → no agent (HTTPS/other apps unaffected).
+      MATCH_GIT_SSH_KEY: { required: false }
       APP_STORE_CONNECT_API_KEY_ID: { required: false }
       APP_STORE_CONNECT_API_KEY_ISSUER_ID: { required: false }
       APP_STORE_CONNECT_API_KEY_P8: { required: false }
@@ -348,15 +352,18 @@ jobs:
       packages: read    # gradle runs inside the Xcode framework build phase (fastlane gym)
     timeout-minutes: 60
     # See the android job: catalog auth via GITHUB_ACTOR default var + this token.
+    # MATCH_GIT_SSH_KEY is surfaced as env (not just a secret) so the ssh-agent
+    # step's `if:` can test it — the `secrets` context is illegal in a step `if:`.
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MATCH_GIT_SSH_KEY: ${{ secrets.MATCH_GIT_SSH_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
       # Fail fast with a readable message if the Apple secrets aren't set, instead of
       # letting match/gym error deep in the build. (The job only runs when the core
-      # secrets are present; this also catches the HTTPS match-repo auth nuance.)
+      # secrets are present; this also catches the match-repo auth nuance.)
       - name: Verify Apple credentials are present
         env:
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
@@ -372,14 +379,25 @@ jobs:
                    APP_STORE_CONNECT_API_KEY_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8 APPLE_TEAM_ID; do
             [ -z "${!v}" ] && missing="$missing $v"
           done
-          # HTTPS match repos also need MATCH_GIT_BASIC_AUTHORIZATION; SSH (git@) don't.
+          # Match repo auth depends on the URL scheme:
+          #   https:// → MATCH_GIT_BASIC_AUTHORIZATION   git@/ssh:// → MATCH_GIT_SSH_KEY
           case "$MATCH_GIT_URL" in
-            https://*) [ -z "$MATCH_GIT_BASIC_AUTHORIZATION" ] && missing="$missing MATCH_GIT_BASIC_AUTHORIZATION" ;;
+            https://*)      [ -z "$MATCH_GIT_BASIC_AUTHORIZATION" ] && missing="$missing MATCH_GIT_BASIC_AUTHORIZATION" ;;
+            git@*|ssh://*)  [ -z "$MATCH_GIT_SSH_KEY" ] && missing="$missing MATCH_GIT_SSH_KEY" ;;
           esac
           if [ -n "$missing" ]; then
             echo "::error::Missing iOS release secrets:$missing. Nothing to publish."
             exit 1
           fi
+
+      # Start an ssh-agent with the match SSH key when provided (SSH certs repo).
+      # Opt-in: skipped when MATCH_GIT_SSH_KEY is unset, so HTTPS-match apps are
+      # unaffected. Gated on env (not secrets — illegal in `if:`).
+      - name: Set up SSH agent for match
+        if: ${{ env.MATCH_GIT_SSH_KEY != '' }}
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MATCH_GIT_SSH_KEY }}
 
       - name: Set up JDK
         uses: actions/setup-java@v5

@@ -176,9 +176,11 @@ Secret: `PLAY_SERVICE_ACCOUNT_JSON` (the same one `release.yml` uses).
 `RELEASE_KEY_PASSWORD`, `PLAY_SERVICE_ACCOUNT_JSON`.
 Missing → Android does a build-only dry-run (debug-signed, not published).
 
-**iOS** — `MATCH_GIT_URL`, `MATCH_PASSWORD`, `MATCH_GIT_BASIC_AUTHORIZATION` (HTTPS match repos),
-`APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_KEY_ISSUER_ID`,
-`APP_STORE_CONNECT_API_KEY_P8`, `APPLE_TEAM_ID`.
+**iOS** — `MATCH_GIT_URL`, `MATCH_PASSWORD`, `APP_STORE_CONNECT_API_KEY_ID`,
+`APP_STORE_CONNECT_API_KEY_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_P8`, `APPLE_TEAM_ID`,
+plus **match repo auth by URL scheme**: `MATCH_GIT_BASIC_AUTHORIZATION` for an
+`https://` certs repo, or `MATCH_GIT_SSH_KEY` (an SSH private key; an ssh-agent is
+started for it) for a `git@`/`ssh://` certs repo.
 Missing → the iOS job is skipped.
 
 **Build-time config (optional)** — `EXTRA_GRADLE_PROPERTIES`: a multiline `key=value`
