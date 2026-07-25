@@ -175,7 +175,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the GitHub release + upload the AAB
+      packages: read    # resolve a shared version catalog if the app consumes one
     timeout-minutes: 45
+    # Apps that import a version catalog from GitHub Packages authenticate in
+    # settings.gradle.kts using the default GITHUB_ACTOR var + this token. Harmless
+    # for apps that don't. NOTE: the CALLER must also grant `packages: read` on its
+    # release job, or this job's token is capped to none.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -293,7 +300,11 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: read
+      packages: read    # gradle runs inside the Xcode framework build phase (fastlane gym)
     timeout-minutes: 60
+    # See the android job: catalog auth via GITHUB_ACTOR default var + this token.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -347,7 +358,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.konan
-          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          # hashFiles ignores missing paths: apps with a local catalog key off it;
+          # apps importing a remote catalog key off settings.gradle.kts instead.
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'settings.gradle.kts') }}
           restore-keys: konan-${{ runner.os }}-
 
       - name: Set up Ruby + bundler
