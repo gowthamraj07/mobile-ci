@@ -1,0 +1,104 @@
+name: Play track promotion (reusable)
+
+# Promote an already-published Android release from one Google Play track to the next
+# (internal → alpha → beta → production) via Gradle Play Publisher's
+# `promoteReleaseArtifact`, decoupled from building a new binary. No new AAB is built.
+#
+# Call it from an app repo:
+#
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         from-track: { type: choice, options: [ internal, alpha, beta ] }
+#         to-track:   { type: choice, options: [ alpha, beta, production ] }
+#   jobs:
+#     promote:
+#       uses: gowthamraj07/mobile-ci/.github/workflows/promote.yml@v1
+#       with:
+#         from-track: ${{ inputs.from-track }}
+#         to-track: ${{ inputs.to-track }}
+#       secrets: inherit          # needs PLAY_SERVICE_ACCOUNT_JSON
+#
+# Conventions (same as release.yml): Android module `composeApp` applying GPP behind
+# -PenablePlayPublisher (GPP reads play-service-account.json at the repo root).
+on:
+  workflow_call:
+    inputs:
+      android-module:
+        description: Gradle module that owns the Play release.
+        type: string
+        default: composeApp
+      java-version:
+        type: string
+        default: "17"
+      from-track:
+        description: Source Play track.
+        type: string
+        required: true
+      to-track:
+        description: Target Play track.
+        type: string
+        required: true
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON:
+        description: JSON of the Play service account (release-manager permission).
+        required: false
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.from-track }} → ${{ inputs.to-track }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Only allow the sanctioned promotion ladder; reject arbitrary jumps.
+      - name: Validate promotion path
+        env:
+          FROM: ${{ inputs.from-track }}
+          TO: ${{ inputs.to-track }}
+        run: |
+          case "$FROM->$TO" in
+            "internal->alpha"|"alpha->beta"|"beta->production") echo "Valid: $FROM → $TO" ;;
+            *) echo "::error::Invalid promotion path: $FROM → $TO. Allowed: internal→alpha, alpha→beta, beta→production."; exit 1 ;;
+          esac
+
+      - name: Verify Play credentials are present
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON not set — nothing to promote."
+            exit 1
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        with:
+          cache-read-only: true
+
+      - name: Configure Play credentials
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > play-service-account.json
+
+      - name: Promote release
+        run: >-
+          ./gradlew :${{ inputs.android-module }}:promoteReleaseArtifact
+          -PenablePlayPublisher
+          --from-track=${{ inputs.from-track }}
+          --promote-track=${{ inputs.to-track }}
+          --stacktrace
+
+      - name: Clean up Play credentials
+        if: always()
+        run: rm -f play-service-account.json

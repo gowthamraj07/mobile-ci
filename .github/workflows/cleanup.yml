@@ -1,0 +1,78 @@
+name: Repo housekeeping (reusable)
+
+# Scheduled cleanup for a consumer repo: prune old workflow runs, and (optionally)
+# old GHCR container image versions for apps that publish a server/Docker image.
+#
+# Call it from an app repo:
+#
+#   on:
+#     schedule: [ { cron: "0 0 * * 0" } ]   # weekly
+#     workflow_dispatch:
+#   jobs:
+#     cleanup:
+#       permissions:
+#         actions: write     # delete workflow runs
+#         packages: write    # delete container versions (only if container-package set)
+#       uses: gowthamraj07/mobile-ci/.github/workflows/cleanup.yml@v1
+#       with:
+#         container-package: drive-smart-server   # omit for app-only repos
+on:
+  workflow_call:
+    inputs:
+      retain-days:
+        description: Delete workflow runs older than this many days.
+        type: number
+        default: 30
+      keep-minimum-runs:
+        description: Always keep at least this many recent runs.
+        type: number
+        default: 10
+      container-package:
+        description: >-
+          GHCR container package name to prune (blank = skip container cleanup).
+        type: string
+        default: ""
+      container-min-versions-to-keep:
+        type: number
+        default: 10
+
+jobs:
+  runs:
+    name: Prune old workflow runs
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete old workflow runs
+        uses: Mattraks/delete-workflow-runs@0cf693bc9909e5e867ee8f27b813224ba862939c # v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: ${{ inputs.retain-days }}
+          keep_minimum_runs: ${{ inputs.keep-minimum-runs }}
+
+  containers:
+    name: Prune old container images
+    if: ${{ inputs.container-package != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Delete untagged container images (keep 5)
+        uses: actions/delete-package-versions@25ad4af5be03aef10e0b3376b248688b7a44c40b # v5
+        with:
+          package-name: ${{ inputs.container-package }}
+          package-type: container
+          delete-only-untagged-versions: true
+          min-versions-to-keep: 5
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete old container images (keep minimum)
+        uses: actions/delete-package-versions@25ad4af5be03aef10e0b3376b248688b7a44c40b # v5
+        with:
+          package-name: ${{ inputs.container-package }}
+          package-type: container
+          delete-only-untagged-versions: false
+          min-versions-to-keep: ${{ inputs.container-min-versions-to-keep }}
+          ignore-versions: "^(latest|main|master|develop|staging|production)$"
+          token: ${{ secrets.GITHUB_TOKEN }}

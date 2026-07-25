@@ -172,6 +172,46 @@ Secret: `PLAY_SERVICE_ACCOUNT_JSON` (the same one `release.yml` uses).
 > asset catalog via `release.yml`. App Store *screenshots* would go through
 > fastlane `deliver` (not yet wired).
 
+## Promote a Play track (`promote.yml`)
+
+Promote an already-published Android release up the track ladder
+(`internal → alpha → beta → production`) via GPP `promoteReleaseArtifact` — no new
+binary is built. Only the sanctioned one-step promotions are allowed.
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      from-track: { type: choice, options: [ internal, alpha, beta ] }
+      to-track:   { type: choice, options: [ alpha, beta, production ] }
+jobs:
+  promote:
+    uses: gowthamraj07/mobile-ci/.github/workflows/promote.yml@v1
+    with:
+      from-track: ${{ inputs.from-track }}
+      to-track: ${{ inputs.to-track }}
+    secrets: inherit   # PLAY_SERVICE_ACCOUNT_JSON
+```
+
+## Housekeeping (`cleanup.yml`)
+
+Scheduled prune of old workflow runs (all repos) and, optionally, old GHCR container
+image versions (`container-package`, for repos that ship a server image).
+
+```yaml
+on:
+  schedule: [ { cron: "0 0 * * 0" } ]
+  workflow_dispatch:
+jobs:
+  cleanup:
+    permissions:
+      actions: write
+      packages: write            # only needed with container-package
+    uses: gowthamraj07/mobile-ci/.github/workflows/cleanup.yml@v1
+    with:
+      container-package: my-server   # omit for app-only repos
+```
+
 ## Inputs
 
 | Input | Default | Purpose |
