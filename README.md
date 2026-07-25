@@ -6,6 +6,10 @@ Shared CI for my Compose Multiplatform apps. Reusable workflows:
 - **`release.yml`** — a single run that ships **iOS and Android at the same version**.
 - **`sync-listing.yml`** — push the **Google Play store listing** (icon, feature
   graphic, screenshots, listing text) on demand, decoupled from releases.
+- **`promote.yml`** — promote an Android release up the Play track ladder.
+- **`cleanup.yml`** — scheduled repo housekeeping (old runs / container images).
+
+All the secret names these workflows read live in one place: **[`SECRETS.md`](./SECRETS.md)**.
 
 - `version` job resolves/creates the shared `vX.Y.Z` tag (source of truth for both platforms).
 - `android` job → Google Play via Gradle Play Publisher, and attaches the AAB to a GitHub Release.
