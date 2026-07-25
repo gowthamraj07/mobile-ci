@@ -221,10 +221,15 @@ jobs:
       # passwords the build reads via project.findProperty). No-op when unset. On an
       # ephemeral runner these lines live only for this job.
       - name: Apply extra gradle.properties
-        if: ${{ secrets.EXTRA_GRADLE_PROPERTIES != '' }}
         env:
           EXTRA_GRADLE_PROPERTIES: ${{ secrets.EXTRA_GRADLE_PROPERTIES }}
+        # The `secrets` context is not allowed in a step `if:`, so gate inside the
+        # script: unset → no-op (apps without mTLS are unaffected).
         run: |
+          if [ -z "$EXTRA_GRADLE_PROPERTIES" ]; then
+            echo "EXTRA_GRADLE_PROPERTIES not set — skipping."
+            exit 0
+          fi
           printf '\n%s\n' "$EXTRA_GRADLE_PROPERTIES" >> gradle.properties
           echo "Appended $(printf '%s' "$EXTRA_GRADLE_PROPERTIES" | grep -c '=') extra gradle propert(ies)."
 
@@ -406,10 +411,15 @@ jobs:
       # Opt-in: same gradle.properties injection as the Android job, so a pre-build
       # task (below) and the Kotlin framework build phase see the extra properties.
       - name: Apply extra gradle.properties
-        if: ${{ secrets.EXTRA_GRADLE_PROPERTIES != '' }}
         env:
           EXTRA_GRADLE_PROPERTIES: ${{ secrets.EXTRA_GRADLE_PROPERTIES }}
+        # The `secrets` context is not allowed in a step `if:`, so gate inside the
+        # script: unset → no-op (apps without mTLS are unaffected).
         run: |
+          if [ -z "$EXTRA_GRADLE_PROPERTIES" ]; then
+            echo "EXTRA_GRADLE_PROPERTIES not set — skipping."
+            exit 0
+          fi
           printf '\n%s\n' "$EXTRA_GRADLE_PROPERTIES" >> gradle.properties
           echo "Appended $(printf '%s' "$EXTRA_GRADLE_PROPERTIES" | grep -c '=') extra gradle propert(ies)."
 
