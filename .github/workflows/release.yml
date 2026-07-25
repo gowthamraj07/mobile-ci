@@ -47,6 +47,20 @@ on:
         description: versionName override (e.g. 1.4.0); blank = auto-bump the patch.
         type: string
         default: ""
+      android-prebuild-gradle-task:
+        description: >-
+          Optional Gradle task run on the Android job before bundleRelease (e.g. to
+          inject build-time config). Blank = skipped. Runs after EXTRA_GRADLE_PROPERTIES
+          is applied, so it can read those properties.
+        type: string
+        default: ""
+      ios-prebuild-gradle-task:
+        description: >-
+          Optional Gradle task run on the iOS job before fastlane (e.g.
+          ":composeApp:updateIosPlist" to embed an mTLS cert password into Info.plist).
+          Blank = skipped. Runs after EXTRA_GRADLE_PROPERTIES is applied.
+        type: string
+        default: ""
     secrets:
       RELEASE_KEYSTORE_B64: { required: false }
       RELEASE_STORE_PASSWORD: { required: false }
@@ -60,6 +74,11 @@ on:
       APP_STORE_CONNECT_API_KEY_ISSUER_ID: { required: false }
       APP_STORE_CONNECT_API_KEY_P8: { required: false }
       APPLE_TEAM_ID: { required: false }
+      # Optional multiline `key=value` block appended to gradle.properties on BOTH
+      # platform jobs before the build. For apps that feed build-time secrets into
+      # Gradle (e.g. mTLS client-cert passwords read via project.findProperty and
+      # baked into BuildConfig / Info.plist). Unset → nothing is appended.
+      EXTRA_GRADLE_PROPERTIES: { required: false }
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -198,6 +217,17 @@ jobs:
         with:
           cache-read-only: true
 
+      # Opt-in: append caller-supplied gradle.properties lines (e.g. mTLS cert
+      # passwords the build reads via project.findProperty). No-op when unset. On an
+      # ephemeral runner these lines live only for this job.
+      - name: Apply extra gradle.properties
+        if: ${{ secrets.EXTRA_GRADLE_PROPERTIES != '' }}
+        env:
+          EXTRA_GRADLE_PROPERTIES: ${{ secrets.EXTRA_GRADLE_PROPERTIES }}
+        run: |
+          printf '\n%s\n' "$EXTRA_GRADLE_PROPERTIES" >> gradle.properties
+          echo "Appended $(printf '%s' "$EXTRA_GRADLE_PROPERTIES" | grep -c '=') extra gradle propert(ies)."
+
       # If the keystore secret is present, decode it and expose the signing config to
       # Gradle as ORG_GRADLE_PROJECT_* env vars. Absent → debug-signed dry-run.
       - name: Configure release signing
@@ -229,6 +259,16 @@ jobs:
             echo "::warning::RELEASE_KEYSTORE_B64 not set — building a DEBUG-signed, unpublishable AAB (dry-run)."
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # Opt-in app-defined task before the bundle (reads any EXTRA_GRADLE_PROPERTIES
+      # applied above). Blank input → skipped.
+      - name: Android pre-build Gradle task
+        if: ${{ inputs.android-prebuild-gradle-task != '' }}
+        run: >-
+          ./gradlew ${{ inputs.android-prebuild-gradle-task }}
+          -PappVersionCode=${{ needs.version.outputs.code }}
+          -PappVersionName=${{ needs.version.outputs.name }}
+          --stacktrace
 
       - name: Build release bundle
         run: >-
@@ -363,12 +403,29 @@ jobs:
           key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'settings.gradle.kts') }}
           restore-keys: konan-${{ runner.os }}-
 
+      # Opt-in: same gradle.properties injection as the Android job, so a pre-build
+      # task (below) and the Kotlin framework build phase see the extra properties.
+      - name: Apply extra gradle.properties
+        if: ${{ secrets.EXTRA_GRADLE_PROPERTIES != '' }}
+        env:
+          EXTRA_GRADLE_PROPERTIES: ${{ secrets.EXTRA_GRADLE_PROPERTIES }}
+        run: |
+          printf '\n%s\n' "$EXTRA_GRADLE_PROPERTIES" >> gradle.properties
+          echo "Appended $(printf '%s' "$EXTRA_GRADLE_PROPERTIES" | grep -c '=') extra gradle propert(ies)."
+
       - name: Set up Ruby + bundler
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ inputs.ruby-version }}
           bundler-cache: true
           working-directory: ${{ inputs.ios-directory }}
+
+      # Opt-in app-defined task before fastlane — e.g. ":composeApp:updateIosPlist"
+      # to embed an mTLS cert password (from EXTRA_GRADLE_PROPERTIES) into Info.plist.
+      # Blank input → skipped. Runs from repo root.
+      - name: iOS pre-build Gradle task
+        if: ${{ inputs.ios-prebuild-gradle-task != '' }}
+        run: ./gradlew ${{ inputs.ios-prebuild-gradle-task }} --stacktrace
 
       - name: fastlane ios beta (match → gym → pilot)
         working-directory: ${{ inputs.ios-directory }}

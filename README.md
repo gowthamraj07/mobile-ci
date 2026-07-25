@@ -167,6 +167,8 @@ Secret: `PLAY_SERVICE_ACCOUNT_JSON` (the same one `release.yml` uses).
 | `ruby-version` | `3.3` | Ruby for fastlane |
 | `track` | `internal` | Play track |
 | `versionName` | `""` | Explicit version; blank auto-bumps the patch |
+| `android-prebuild-gradle-task` | `""` | Optional Gradle task run before `bundleRelease`; blank = skipped |
+| `ios-prebuild-gradle-task` | `""` | Optional Gradle task run before fastlane (e.g. `:composeApp:updateIosPlist`); blank = skipped |
 
 ## Secrets (all optional; pass via `secrets: inherit`)
 
@@ -178,6 +180,14 @@ Missing → Android does a build-only dry-run (debug-signed, not published).
 `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_KEY_ISSUER_ID`,
 `APP_STORE_CONNECT_API_KEY_P8`, `APPLE_TEAM_ID`.
 Missing → the iOS job is skipped.
+
+**Build-time config (optional)** — `EXTRA_GRADLE_PROPERTIES`: a multiline `key=value`
+block appended to `gradle.properties` on **both** platform jobs before the build, for
+apps that feed secrets into Gradle (e.g. mTLS client-cert passwords read via
+`project.findProperty(...)` and baked into `BuildConfig` / `Info.plist`). Unset →
+nothing is appended, so apps without it are unaffected. Pair it with the
+`*-prebuild-gradle-task` inputs when a task must consume those properties (the iOS
+plist embed runs before fastlane; the properties are applied first).
 
 ## App conventions this workflow assumes
 
