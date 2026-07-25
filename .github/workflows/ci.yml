@@ -1,0 +1,65 @@
+name: CI
+
+# Self-check for this repo's reusable workflows, and the gate that advances the
+# `v1` tag every consumer app pins.
+#
+# Because apps pin `@v1` (a moving tag), a broken push to a reusable workflow would
+# break EVERY app at once — this already happened once (a `secrets` context used in a
+# step `if:`, which GitHub rejects as a "workflow file issue"). actionlint catches
+# that class of error (and shellcheck issues) before `v1` ever moves.
+#
+# Flow: `lint` runs on PRs and on pushes to main that touch a workflow. On main,
+# `advance-v1` runs ONLY after `lint` passes and force-moves `v1` to the new commit.
+# So `v1` can only ever point at an actionlint-clean revision — no more manual
+# `git tag -f v1`.
+on:
+  pull_request:
+    paths: [ ".github/workflows/**" ]
+  push:
+    branches: [ main ]
+    paths: [ ".github/workflows/**" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Pinned actionlint binary (avoids a third-party action in the trust path).
+      # shellcheck is preinstalled on ubuntu-latest, so its integration runs too.
+      - name: Run actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+        run: |
+          curl -sSfL \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz actionlint
+          ./actionlint -color
+
+  # Gate: advance the `v1` tag consumers pin, but only for a workflow change on main
+  # that passed lint. Pushing a tag with GITHUB_TOKEN does not re-trigger workflows.
+  advance-v1:
+    name: Advance v1 tag
+    needs: lint
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # force-update the v1 tag
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Move v1 to this commit
+        run: |
+          git tag -f v1
+          git push -f origin v1
+          echo "::notice::v1 now points at ${GITHUB_SHA} (actionlint-clean)."

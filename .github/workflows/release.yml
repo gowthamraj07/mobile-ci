@@ -136,10 +136,12 @@ jobs:
           CORE="${NAME%%-*}"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE"
           CODE=$(( ${MAJOR:-0} * 10000 + ${MINOR:-0} * 100 + ${PATCH:-0} ))
-          echo "code=${CODE}" >> "$GITHUB_OUTPUT"
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${NAME}" >> "$GITHUB_OUTPUT"
-          echo "build=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          {
+            echo "code=${CODE}"
+            echo "name=${NAME}"
+            echo "tag=v${NAME}"
+            echo "build=${GITHUB_RUN_NUMBER}"
+          } >> "$GITHUB_OUTPUT"
           echo "Releasing versionName=${NAME} tag=v${NAME} androidCode=${CODE} iosBuild=${GITHUB_RUN_NUMBER}"
 
       # Per-platform publishability. `ios` gates the iOS job so it's cleanly SKIPPED

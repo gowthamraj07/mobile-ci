@@ -49,6 +49,15 @@ jobs:
 
 Pin `@v1` (a tag in this repo) so upstream changes never surprise an app; bump the ref to adopt them.
 
+### How `v1` moves (self-check gate)
+
+`v1` is a moving tag, so a broken workflow would break every consumer at once. To
+prevent that, `ci.yml` runs **actionlint** on every PR and every workflow change on
+`main`, and **only advances `v1` after lint passes** (the `advance-v1` job) — so `v1`
+can never point at an invalid revision. Don't `git tag -f v1` by hand; merge to `main`
+and let the gate move it. (Requires the repo's Actions token to have write permission:
+Settings → Actions → General → Workflow permissions → *Read and write*.)
+
 ## Triggers
 
 | Trigger | Version | Tag |
