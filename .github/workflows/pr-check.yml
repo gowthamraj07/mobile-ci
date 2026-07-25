@@ -99,10 +99,10 @@ jobs:
       ios: ${{ steps.filter.outputs.ios }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Filter paths
-        uses: dorny/paths-filter@6852f92c20ea7fd3b0c25de3b5112db3a98da050 # v3
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
           # Built from the module/dir inputs so a renamed module keeps working.
@@ -134,7 +134,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -143,14 +143,14 @@ jobs:
           java-version: ${{ inputs.java-version }}
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           # Only write the dependency cache from the default branch to keep it clean.
           cache-read-only: ${{ github.ref != format('refs/heads/{0}', inputs.default-branch) }}
 
       # Kotlin/Native compiler + platform libs live outside the Gradle cache.
       - name: Cache Konan
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('settings.gradle.kts', format('{0}/build.gradle.kts', inputs.android-module)) }}
@@ -187,7 +187,7 @@ jobs:
 
       - name: Upload reports on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: reports
           if-no-files-found: ignore
@@ -216,13 +216,13 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Newest stable Xcode on the runner. macos-latest's default can lag the SDK
       # Apple requires for uploads; pin to a concrete version if you need
       # byte-reproducible archives.
       - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@1242409711ff5721add51979e9e11e23ebb7e5a4 # v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: ${{ inputs.xcode-version }}
 
@@ -233,12 +233,12 @@ jobs:
           java-version: ${{ inputs.java-version }}
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           cache-read-only: ${{ github.ref != format('refs/heads/{0}', inputs.default-branch) }}
 
       - name: Cache Konan
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('settings.gradle.kts', format('{0}/build.gradle.kts', inputs.android-module)) }}
