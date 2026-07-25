@@ -125,9 +125,15 @@ the PR. Keep `concurrency` in the caller so superseded runs cancel per ref.
 | `xcode-version` | `latest-stable` | Xcode on the macOS runner |
 | `default-branch` | `main` | Owns the caches; pushes to it always run iOS |
 | `run-detekt` | `true` | Run `./gradlew detekt` |
+| `run-android-lint` | `true` | Run `:<module>:lintDebug` |
+| `run-screenshot-tests` | `true` | Run Roborazzi `:<module>:verifyRoborazziDebug` |
+| `ios-workspace` | `""` | Build this `.xcworkspace` instead of `ios-project` |
+| `ios-uses-cocoapods` | `false` | `pod install` in `ios-directory` before the macOS build |
 
-Assumes the fleet-standard **direct-framework** iOS integration (no CocoaPods) — the
-macOS job builds the `.xcodeproj` directly. CocoaPods-based apps aren't supported yet.
+Defaults target the fleet-standard **direct-framework** iOS integration (no CocoaPods,
+builds the `.xcodeproj`). For a CocoaPods or SPM-workspace app, set `ios-workspace`
+(and `ios-uses-cocoapods: true` for pods). Apps that lack detekt / Roborazzi / lint can
+opt those steps out via the `run-*` flags.
 
 ## Sync the Play store listing (`sync-listing.yml`)
 

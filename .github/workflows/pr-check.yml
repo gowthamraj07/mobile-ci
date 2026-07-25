@@ -63,6 +63,26 @@ on:
         description: Run `./gradlew detekt` (static analysis + ktlint-style formatting).
         type: boolean
         default: true
+      run-android-lint:
+        description: Run `./gradlew :<module>:lintDebug`.
+        type: boolean
+        default: true
+      run-screenshot-tests:
+        description: Run Roborazzi `:<module>:verifyRoborazziDebug` alongside unit tests.
+        type: boolean
+        default: true
+      ios-workspace:
+        description: >-
+          Path to an .xcworkspace to build instead of `ios-project` (e.g. for CocoaPods
+          or SPM-workspace apps). Blank = build the .xcodeproj.
+        type: string
+        default: ""
+      ios-uses-cocoapods:
+        description: >-
+          Run `pod install` in `ios-directory` before the macOS build (needs a Podfile
+          there). Pair with `ios-workspace`.
+        type: boolean
+        default: false
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -141,10 +161,15 @@ jobs:
         run: ./gradlew detekt --stacktrace
 
       - name: Android Lint
+        if: ${{ inputs.run-android-lint }}
         run: ./gradlew :${{ inputs.android-module }}:lintDebug --stacktrace
 
-      - name: Unit tests + Roborazzi screenshot verification
-        run: ./gradlew :${{ inputs.android-module }}:testDebugUnitTest :${{ inputs.android-module }}:verifyRoborazziDebug --stacktrace
+      - name: Unit tests
+        run: ./gradlew :${{ inputs.android-module }}:testDebugUnitTest --stacktrace
+
+      - name: Roborazzi screenshot verification
+        if: ${{ inputs.run-screenshot-tests }}
+        run: ./gradlew :${{ inputs.android-module }}:verifyRoborazziDebug --stacktrace
 
       - name: Assemble debug APK
         run: ./gradlew :${{ inputs.android-module }}:assembleDebug --stacktrace
@@ -219,13 +244,31 @@ jobs:
           key: konan-${{ runner.os }}-${{ hashFiles('settings.gradle.kts', format('{0}/build.gradle.kts', inputs.android-module)) }}
           restore-keys: konan-${{ runner.os }}-
 
+      # CocoaPods apps: resolve pods before the workspace build. macos runners ship
+      # CocoaPods, so no Ruby setup is needed. Opt-in via ios-uses-cocoapods.
+      - name: pod install
+        if: ${{ inputs.ios-uses-cocoapods }}
+        working-directory: ${{ inputs.ios-directory }}
+        run: pod install
+
       # Builds the shared Kotlin framework (via the "Compile Kotlin Framework" build
       # phase → embedAndSignAppleFrameworkForXcode) and the Swift wrapper. No signing.
+      # Builds the .xcworkspace when ios-workspace is set (CocoaPods/SPM-workspace),
+      # otherwise the .xcodeproj.
       - name: Build iOS app for simulator
-        run: >-
-          xcodebuild build
-          -project ${{ inputs.ios-project }}
-          -scheme ${{ inputs.ios-scheme }}
-          -configuration Debug
-          -destination 'generic/platform=iOS Simulator'
-          CODE_SIGNING_ALLOWED=NO
+        env:
+          IOS_WORKSPACE: ${{ inputs.ios-workspace }}
+          IOS_PROJECT: ${{ inputs.ios-project }}
+          IOS_SCHEME: ${{ inputs.ios-scheme }}
+        run: |
+          if [ -n "$IOS_WORKSPACE" ]; then
+            target=(-workspace "$IOS_WORKSPACE")
+          else
+            target=(-project "$IOS_PROJECT")
+          fi
+          xcodebuild build \
+            "${target[@]}" \
+            -scheme "$IOS_SCHEME" \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
