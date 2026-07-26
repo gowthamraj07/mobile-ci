@@ -103,7 +103,7 @@ jobs:
       ios_ready: ${{ steps.publish.outputs.ios }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0   # full tag history — the version fallback reads the latest tag
 
@@ -210,7 +210,7 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -219,7 +219,7 @@ jobs:
           java-version: ${{ inputs.java-version }}
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           cache-read-only: true
 
@@ -289,7 +289,7 @@ jobs:
           --stacktrace
 
       - name: Upload AAB artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: release-aab
           path: ${{ inputs.android-module }}/build/outputs/bundle/release/*.aab
@@ -361,7 +361,7 @@ jobs:
       MATCH_GIT_SSH_KEY: ${{ secrets.MATCH_GIT_SSH_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Fail fast with a readable message if the Apple secrets aren't set, instead of
       # letting match/gym error deep in the build. (The job only runs when the core
@@ -397,7 +397,7 @@ jobs:
       # unaffected. Gated on env (not secrets — illegal in `if:`).
       - name: Set up SSH agent for match
         if: ${{ env.MATCH_GIT_SSH_KEY != '' }}
-        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
           ssh-private-key: ${{ secrets.MATCH_GIT_SSH_KEY }}
 
@@ -410,17 +410,17 @@ jobs:
       # Newest stable Xcode on the runner. Pin to a concrete version if you later need
       # byte-reproducible archives.
       - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@1242409711ff5721add51979e9e11e23ebb7e5a4 # v1
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
         with:
           xcode-version: latest-stable
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           cache-read-only: true
 
       - name: Cache Konan
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.konan
           # hashFiles ignores missing paths: apps with a local catalog key off it;
@@ -474,7 +474,7 @@ jobs:
 
       - name: Upload build logs on failure
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ios-build-logs
           if-no-files-found: ignore
