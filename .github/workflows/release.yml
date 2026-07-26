@@ -400,16 +400,17 @@ jobs:
           MARKETING_VERSION: ${{ needs.version.outputs.name }}
         run: bundle exec fastlane ios ${{ inputs.ios-build-lane }}
 
-      # Hand the .ipa (and dSYMs if gym emitted them) to publish-ios. gym writes to the
-      # fastlane working dir by default, i.e. the ios-directory.
+      # Hand the .ipa (and dSYMs if gym emitted them) to publish-ios. gym's output
+      # directory is app-specific (e.g. iosApp/build/fastlane), so search recursively
+      # under the ios-directory rather than assuming a fixed location.
       - name: Upload iOS build artifact
         uses: actions/upload-artifact@v6
         with:
           name: release-ios
           if-no-files-found: error
           path: |
-            ${{ inputs.ios-directory }}/*.ipa
-            ${{ inputs.ios-directory }}/*.app.dSYM.zip
+            ${{ inputs.ios-directory }}/**/*.ipa
+            ${{ inputs.ios-directory }}/**/*.app.dSYM.zip
 
       - name: Upload build logs on failure
         if: failure()
