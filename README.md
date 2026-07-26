@@ -11,12 +11,29 @@ Shared CI for my Compose Multiplatform apps. Reusable workflows:
 
 All the secret names these workflows read live in one place: **[`SECRETS.md`](./SECRETS.md)**.
 
-- `version` job resolves/creates the shared `vX.Y.Z` tag (source of truth for both platforms).
-- `android` job → Google Play via Gradle Play Publisher, and attaches the AAB to a GitHub Release.
-- `ios` job → TestFlight via fastlane (`match → gym → pilot`).
+**Build-before-tag DAG** — the tag is pushed only after *both* platforms are known to build,
+so a broken build never leaves an orphan `vX.Y.Z` (which would also skew the next auto-bump):
+
+```
+version ─┬─ compile-android ─┐
+         └─ build-ios ───────┴─ tag ─┬─ publish-android
+                                      └─ publish-ios
+```
+
+- `version` — resolves the shared `vX.Y.Z` (source of truth for both platforms). **No tag push.**
+- `compile-android` — builds the release AAB to prove Android compiles + signs (gate only).
+- `build-ios` — `match → gym → .ipa` (**build-once**); uploads the `.ipa` as an artifact.
+- `tag` — pushes `vX.Y.Z`, reached only if both build jobs succeeded. An unconfigured iOS is
+  **skipped** (doesn't block); a **failed** iOS build **does** block, so nothing ships.
+- `publish-android` → Google Play via Gradle Play Publisher + GitHub Release (rebuilds on ubuntu).
+- `publish-ios` → TestFlight via fastlane `pilot` of the already-built `.ipa` (no rebuild).
 
 `versionCode` is derived from the version (`major*10000 + minor*100 + patch`, e.g. `1.4.3 → 10403`)
 so it's deterministic and monotonic and can never regress below what's live on Play.
+
+> **iOS lane convention:** the app's fastlane project must expose a `build` lane (match → gym,
+> leaves the `.ipa` under the iOS dir) and an `upload` lane (pilot of `ENV["IPA_PATH"]`), instead
+> of one combined `beta` lane. Override the names via `ios-build-lane` / `ios-upload-lane`.
 
 ## Use it from an app
 
