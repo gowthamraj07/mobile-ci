@@ -83,6 +83,14 @@ on:
           there). Pair with `ios-workspace`.
         type: boolean
         default: false
+      ios-prebuild-command:
+        description: >-
+          Optional shell command run (from the repo root) before pod install / the
+          macOS build — e.g. to materialise a gitignored file the Swift code needs
+          ("cp iosApp/BuildConfig.swift.example iosApp/iosApp/BuildConfig.swift").
+          Blank = skipped.
+        type: string
+        default: ""
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -243,6 +251,14 @@ jobs:
           path: ~/.konan
           key: konan-${{ runner.os }}-${{ hashFiles('settings.gradle.kts', format('{0}/build.gradle.kts', inputs.android-module)) }}
           restore-keys: konan-${{ runner.os }}-
+
+      # Opt-in setup before the build (e.g. create a gitignored BuildConfig.swift the
+      # Swift wrapper needs). Runs from the repo root; blank input → skipped.
+      - name: iOS pre-build command
+        if: ${{ inputs.ios-prebuild-command != '' }}
+        env:
+          IOS_PREBUILD_COMMAND: ${{ inputs.ios-prebuild-command }}
+        run: bash -c "$IOS_PREBUILD_COMMAND"
 
       # CocoaPods apps: resolve pods before the workspace build. macos runners ship
       # CocoaPods, so no Ruby setup is needed. Opt-in via ios-uses-cocoapods.

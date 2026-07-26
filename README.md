@@ -133,6 +133,7 @@ the PR. Keep `concurrency` in the caller so superseded runs cancel per ref.
 | `run-screenshot-tests` | `true` | Run Roborazzi `:<module>:verifyRoborazziDebug` |
 | `ios-workspace` | `""` | Build this `.xcworkspace` instead of `ios-project` |
 | `ios-uses-cocoapods` | `false` | `pod install` in `ios-directory` before the macOS build |
+| `ios-prebuild-command` | `""` | Shell command run before the macOS build (e.g. create a gitignored file) |
 
 Defaults target the fleet-standard **direct-framework** iOS integration (no CocoaPods,
 builds the `.xcodeproj`). For a CocoaPods or SPM-workspace app, set `ios-workspace`
