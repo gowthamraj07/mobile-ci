@@ -480,6 +480,13 @@ jobs:
   publish-android:
     name: Android → Play
     needs: [version, tag]
+    # Skip propagates TRANSITIVELY: `tag` succeeding is not enough, because its
+    # own ancestor build-ios is skipped for an iOS-less app, and that skip flows
+    # down the whole needs graph unless each dependent overrides it. Without this
+    # condition Android silently never publishes. Verified by AdaptiveVol run
+    # 30257147004: tag succeeded, publish-android still skipped.
+    if: >-
+      !cancelled() && needs.tag.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the GitHub release + upload the AAB
@@ -604,7 +611,13 @@ jobs:
   publish-ios:
     name: iOS → TestFlight
     needs: [version, tag]
-    if: needs.version.outputs.ios_ready == 'true'
+    # `!cancelled() && tag succeeded` for the same transitive-skip reason as
+    # publish-android (harmless here today, since this job only runs when iOS is
+    # configured and therefore build-ios ran — but it keeps the two symmetric and
+    # survives any future skippable job entering the chain).
+    if: >-
+      !cancelled() && needs.tag.result == 'success'
+      && needs.version.outputs.ios_ready == 'true'
     runs-on: macos-latest
     permissions:
       contents: read
@@ -645,3 +658,56 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IPA_PATH: ${{ steps.ipa.outputs.path }}
         run: bundle exec fastlane ios ${{ inputs.ios-upload-lane }}
+
+  # ---------------------------------------------------------------------------
+  # Fail-loud guard. A release run that publishes NOTHING must not report success.
+  #
+  # This exists because two separate skip bugs shipped green: the tag job being
+  # skipped by an unconfigured iOS, then the publish jobs being skipped by the
+  # same skip propagating transitively. Both times the run was ✅ while no tag was
+  # pushed and nothing reached a store. Skipped is not failed, so nothing else in
+  # the DAG can notice — only an explicit assertion can.
+  #
+  # Contract: every platform the version job judged READY must actually have
+  # published. A platform with no secrets is legitimately not ready and is not
+  # required to publish — but if NEITHER is ready, the run released nothing at
+  # all and is a failure by definition.
+  # ---------------------------------------------------------------------------
+  verify-published:
+    name: Verify the release published
+    needs: [version, publish-android, publish-ios]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert every configured platform published
+        env:
+          ANDROID_READY: ${{ needs.version.outputs.android_ready }}
+          IOS_READY: ${{ needs.version.outputs.ios_ready }}
+          ANDROID_RESULT: ${{ needs.publish-android.result }}
+          IOS_RESULT: ${{ needs.publish-ios.result }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          echo "Release $TAG"
+          echo "  android: ready=${ANDROID_READY:-<unset>} publish=${ANDROID_RESULT:-<unset>}"
+          echo "  ios:     ready=${IOS_READY:-<unset>} publish=${IOS_RESULT:-<unset>}"
+
+          if [ "$ANDROID_READY" != "true" ] && [ "$IOS_READY" != "true" ]; then
+            echo "::error::This run published NOTHING — neither platform has release secrets configured. See SECRETS.md."
+            exit 1
+          fi
+
+          failed=""
+          if [ "$ANDROID_READY" = "true" ] && [ "$ANDROID_RESULT" != "success" ]; then
+            failed="$failed Android[publish-android=$ANDROID_RESULT]"
+          fi
+          if [ "$IOS_READY" = "true" ] && [ "$IOS_RESULT" != "success" ]; then
+            failed="$failed iOS[publish-ios=$IOS_RESULT]"
+          fi
+
+          if [ -n "$failed" ]; then
+            echo "::error::Configured to release but did not publish:$failed. A *skipped* publish job means a dependency was skipped and the skip propagated — check the job graph, not the build logs."
+            exit 1
+          fi
+
+          echo "OK — every configured platform published $TAG."
