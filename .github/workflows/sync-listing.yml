@@ -17,7 +17,8 @@ name: Play listing sync (reusable)
 #   jobs:
 #     sync:
 #       uses: gowthamraj07/mobile-ci/.github/workflows/sync-listing.yml@v1
-#       secrets: inherit
+#       secrets:
+#         PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
 #
 # Conventions the caller app must follow (overridable via inputs):
 #   - Android module named `composeApp`, applying Gradle Play Publisher behind

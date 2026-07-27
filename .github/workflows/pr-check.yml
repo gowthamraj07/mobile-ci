@@ -19,7 +19,7 @@ name: CMP PR check (reusable)
 #         packages: read        # resolve the shared version catalog (GitHub Packages)
 #         pull-requests: read    # dorny/paths-filter reads the PR file list
 #       uses: gowthamraj07/mobile-ci/.github/workflows/pr-check.yml@v1
-#       secrets: inherit          # passes GITHUB_TOKEN through for catalog auth
+#       # no `secrets:` block needed — GITHUB_TOKEN is provided automatically
 #
 # Conventions the caller app follows (all overridable via inputs):
 #   - Android module named `composeApp`, with :lintDebug / :testDebugUnitTest /

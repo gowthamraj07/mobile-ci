@@ -33,7 +33,9 @@ name: CMP Release (reusable)
 #       with:
 #         track: ${{ inputs.track || 'internal' }}
 #         versionName: ${{ inputs.versionName }}
-#       secrets: inherit
+#       secrets:                     # name each one — NEVER `secrets: inherit`,
+#         RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}   # which passes
+#         ...                        # nothing at all across owners, silently
 #
 # Conventions the caller app must follow (all overridable via inputs):
 #   - Android module named `composeApp`, reading -PappVersionCode / -PappVersionName
