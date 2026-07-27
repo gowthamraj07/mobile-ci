@@ -17,7 +17,8 @@ name: Play track promotion (reusable)
 #       with:
 #         from-track: ${{ inputs.from-track }}
 #         to-track: ${{ inputs.to-track }}
-#       secrets: inherit          # needs PLAY_SERVICE_ACCOUNT_JSON
+#       secrets:
+#         PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
 #
 # Conventions (same as release.yml): Android module `composeApp` applying GPP behind
 # -PenablePlayPublisher (GPP reads play-service-account.json at the repo root).

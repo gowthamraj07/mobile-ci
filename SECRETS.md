@@ -3,8 +3,15 @@
 Canonical list of the repository **secret names** the reusable workflows read. Set
 these on each consumer app (Settings → Secrets and variables → Actions). All are
 optional — a missing secret degrades gracefully (Android dry-run / iOS skipped /
-listing or promote fails fast with a clear message). Pass them through with
-`secrets: inherit` in the caller.
+listing or promote fails fast with a clear message), except that a release with
+NEITHER platform configured publishes nothing and is failed by `verify-published`.
+
+Forward them to the reusable workflow **by name** — `SECRET: ${{ secrets.SECRET }}`
+per secret. **Never `secrets: inherit`:** it forwards secrets only when the caller and
+`gowthamraj07/mobile-ci` share an owner/org/enterprise, and when they don't it passes
+nothing at all, silently — every secret arrives empty while the repo plainly has them
+set. (A `pr-check.yml` caller needs no `secrets:` block whatsoever: that workflow
+declares no secrets, and its GITHUB_TOKEN is provided automatically.)
 
 Store every value with `printf '%s'` (never `echo`, which appends a `\n` that breaks
 URL/token secrets).

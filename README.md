@@ -65,7 +65,23 @@ jobs:
     with:
       track: ${{ inputs.track || 'internal' }}
       versionName: ${{ inputs.versionName }}
-    secrets: inherit             # pass the app's release secrets through
+    # Name every secret. `secrets: inherit` forwards NOTHING when the caller and
+    # this repo are under different owners — silently. See "Secrets" below.
+    secrets:
+      RELEASE_KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+      RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+      RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+      RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+      MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+      MATCH_GIT_SSH_KEY: ${{ secrets.MATCH_GIT_SSH_KEY }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      EXTRA_GRADLE_PROPERTIES: ${{ secrets.EXTRA_GRADLE_PROPERTIES }}
 ```
 
 Pin `@v1` (a tag in this repo) so upstream changes never surprise an app; bump the ref to adopt them.
@@ -127,7 +143,9 @@ jobs:
     uses: gowthamraj07/mobile-ci/.github/workflows/pr-check.yml@v1
     with:
       default-branch: main      # set to `master` if that's your mainline
-    secrets: inherit             # passes GITHUB_TOKEN through for catalog auth
+    # No `secrets:` block needed: this workflow declares no secrets, and the
+    # GITHUB_TOKEN it uses for catalog auth reaches a called workflow automatically
+    # (capped by the `permissions:` above) — it never arrives via `secrets: inherit`.
 ```
 
 The `permissions` block is the ceiling for the reusable jobs — omit `packages: read`
@@ -175,7 +193,8 @@ on:
 jobs:
   sync:
     uses: gowthamraj07/mobile-ci/.github/workflows/sync-listing.yml@v1
-    secrets: inherit             # needs PLAY_SERVICE_ACCOUNT_JSON
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
 ```
 
 App layout (generate the images with `mobile-brand-kit`):
@@ -212,7 +231,8 @@ jobs:
     with:
       from-track: ${{ inputs.from-track }}
       to-track: ${{ inputs.to-track }}
-    secrets: inherit   # PLAY_SERVICE_ACCOUNT_JSON
+    secrets:
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
 ```
 
 ## Housekeeping (`cleanup.yml`)
@@ -247,11 +267,18 @@ jobs:
 | `android-prebuild-gradle-task` | `""` | Optional Gradle task run before `bundleRelease`; blank = skipped |
 | `ios-prebuild-gradle-task` | `""` | Optional Gradle task run before fastlane (e.g. `:composeApp:updateIosPlist`); blank = skipped |
 
-## Secrets (all optional; pass via `secrets: inherit`)
+## Secrets (all optional; forward them BY NAME)
+
+> **Never `secrets: inherit`.** It forwards secrets only when the caller and this repo
+> share an owner/org/enterprise. A cross-owner app gets **nothing** — silently: every
+> secret arrives empty, so iOS is skipped and Android dry-runs while the repo plainly
+> has them set. Write `SECRET: ${{ secrets.SECRET }}` for each one.
 
 **Android** — `RELEASE_KEYSTORE_B64`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`,
 `RELEASE_KEY_PASSWORD`, `PLAY_SERVICE_ACCOUNT_JSON`.
-Missing → Android does a build-only dry-run (debug-signed, not published).
+Missing → Android does a build-only dry-run (debug-signed, not published). If BOTH
+platforms are unconfigured the run publishes nothing and `verify-published` **fails**
+it, rather than reporting a misleading green.
 
 **iOS** — `MATCH_GIT_URL`, `MATCH_PASSWORD`, `APP_STORE_CONNECT_API_KEY_ID`,
 `APP_STORE_CONNECT_API_KEY_ISSUER_ID`, `APP_STORE_CONNECT_API_KEY_P8`, `APPLE_TEAM_ID`,
