@@ -431,6 +431,17 @@ jobs:
   tag:
     name: Push release tag
     needs: [version, compile-android, build-ios]
+    # This `if:` is load-bearing. A job whose dependency is SKIPPED is itself
+    # skipped by default, so without it an app with no Apple secrets (build-ios
+    # skipped) never reaches `tag` — and therefore never reaches publish-android
+    # either, because that needs `tag`. The run then reports SUCCESS having
+    # released nothing at all: no tag pushed, nothing on Play. Verified against
+    # AdaptiveVol run 30255346379, which resolved 1.4.10 and shipped none of it.
+    # Tolerate a skipped iOS build; still block on a failed one.
+    if: >-
+      !cancelled()
+      && needs.compile-android.result == 'success'
+      && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write   # push the release tag
