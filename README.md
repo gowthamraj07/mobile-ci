@@ -6,7 +6,8 @@ Shared CI for my Compose Multiplatform apps. Reusable workflows:
 - **`release.yml`** — a single run that ships **iOS and Android at the same version**.
 - **`sync-listing.yml`** — push the **Google Play store listing** (icon, feature
   graphic, screenshots, listing text) on demand, decoupled from releases.
-- **`promote.yml`** — promote an Android release up the Play track ladder.
+- **`promote.yml`** — promote an Android release between Play tracks.
+- **`submit-ios.yml`** — submit a build already on TestFlight to **App Store review**.
 - **`cleanup.yml`** — scheduled repo housekeeping (old runs / container images).
 
 All the secret names these workflows read live in one place: **[`SECRETS.md`](./SECRETS.md)**.
@@ -215,9 +216,9 @@ Secret: `PLAY_SERVICE_ACCOUNT_JSON` (the same one `release.yml` uses).
 
 ## Promote a Play track (`promote.yml`)
 
-Promote an already-published Android release up the track ladder
-(`internal → alpha → beta → production`) via GPP `promoteReleaseArtifact` — no new
-binary is built. Only the sanctioned one-step promotions are allowed.
+Promote an already-published Android release from one Play track to another via GPP
+`promoteReleaseArtifact` — no new binary is built, so what reaches production is
+byte-for-byte what the testers validated.
 
 ```yaml
 on:
@@ -234,6 +235,65 @@ jobs:
     secrets:
       PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
 ```
+
+### Which hops are legal (`allowed-promotions`)
+
+The permitted hops are the **app's** policy, declared by the caller and enforced by
+the workflow. The default is the full ladder, one rung at a time:
+
+```
+internal → alpha → beta → production
+```
+
+so `internal → production` in one hop is rejected by default — that friction is what
+stops a production rollout being one careless click from an unvalidated build.
+
+An app whose testing lanes are a subset of the ladder declares its own. A team that
+tests on the internal track only, with no closed or open testing, has no alpha or
+beta to hop through, and the default would make its *only* real promotion impossible:
+
+```yaml
+    with:
+      from-track: internal
+      to-track: production
+      allowed-promotions: internal->production
+```
+
+Commas, newlines and spaces around the arrow all parse. An empty list permits
+nothing — it fails closed. Keep the list to the hops the app's process actually
+validates: it is a policy statement in the app repo's diff, not a bypass flag.
+
+Covered by `tests/test_promotion_path.py`, which runs the real step out of the YAML.
+
+## Submit an iOS build for review (`submit-ios.yml`)
+
+The iOS counterpart of `promote.yml`: attach a build **already on TestFlight** to the
+App Store version and submit it for review, via `deliver` in `skip_binary_upload`
+mode. Nothing is rebuilt, nothing is re-uploaded, and no signing secrets are needed —
+only the App Store Connect API key.
+
+```yaml
+jobs:
+  submit-ios:
+    uses: gowthamraj07/mobile-ci/.github/workflows/submit-ios.yml@v1
+    with:
+      version: ${{ inputs.ios-version }}            # blank = newest v* tag
+      build-number: ${{ inputs.ios-build-number }}  # blank = newest processed build
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+```
+
+The asymmetry with Android is Apple's, not ours: a Play promotion takes effect in
+minutes, while this **submits** to a 24–48h human review. Release to users stays a
+separate act in App Store Connect after approval.
+
+Requires a `submit` lane in the app's iOS fastlane project (override with
+`ios-submit-lane`) that reads `MARKETING_VERSION` / `BUILD_NUMBER` from the
+environment, and an App Store version already sitting in *Prepare for Submission* —
+the fleet keeps store metadata in App Store Connect, not in git.
 
 ## Housekeeping (`cleanup.yml`)
 

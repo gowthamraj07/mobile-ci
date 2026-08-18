@@ -1,8 +1,8 @@
 name: Play track promotion (reusable)
 
-# Promote an already-published Android release from one Google Play track to the next
-# (internal → alpha → beta → production) via Gradle Play Publisher's
-# `promoteReleaseArtifact`, decoupled from building a new binary. No new AAB is built.
+# Promote an already-published Android release from one Google Play track to another
+# via Gradle Play Publisher's `promoteReleaseArtifact`, decoupled from building a new
+# binary. No new AAB is built.
 #
 # Call it from an app repo:
 #
@@ -19,6 +19,25 @@ name: Play track promotion (reusable)
 #         to-track: ${{ inputs.to-track }}
 #       secrets:
 #         PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+#
+# WHICH HOPS ARE LEGAL IS THE APP'S POLICY, declared in `allowed-promotions` and
+# enforced here. The default is the full ladder, one rung at a time:
+#
+#     internal → alpha → beta → production
+#
+# so by default `internal → production` in one hop is REJECTED — that friction is
+# what stops a production rollout being one careless click from an unvalidated build.
+#
+# An app whose testing lanes are a subset of the ladder declares its own. A team that
+# tests on the internal track only and runs no closed/open testing has no alpha or
+# beta to hop through, and the ladder default would make its ONLY real promotion
+# impossible:
+#
+#       with:
+#         allowed-promotions: internal->production
+#
+# Keep the list to the hops the app's testing process actually validates. It is a
+# policy statement, reviewable in the app repo's diff — not a bypass flag.
 #
 # Conventions (same as release.yml): Android module `composeApp` applying GPP behind
 # -PenablePlayPublisher (GPP reads play-service-account.json at the repo root).
@@ -40,6 +59,14 @@ on:
         description: Target Play track.
         type: string
         required: true
+      allowed-promotions:
+        description: >-
+          Promotion hops this app permits, as "from->to" pairs separated by commas or
+          newlines (spaces around the arrow are fine). Defaults to the strict ladder;
+          an app with no closed/open testing lane overrides it, e.g.
+          "internal->production".
+        type: string
+        default: internal->alpha, alpha->beta, beta->production
     secrets:
       PLAY_SERVICE_ACCOUNT_JSON:
         description: JSON of the Play service account (release-manager permission).
@@ -56,16 +83,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      # Only allow the sanctioned promotion ladder; reject arbitrary jumps.
+      # Only allow the hops this app declared; reject everything else.
       - name: Validate promotion path
         env:
           FROM: ${{ inputs.from-track }}
           TO: ${{ inputs.to-track }}
+          ALLOWED: ${{ inputs.allowed-promotions }}
         run: |
-          case "$FROM->$TO" in
-            "internal->alpha"|"alpha->beta"|"beta->production") echo "Valid: $FROM → $TO" ;;
-            *) echo "::error::Invalid promotion path: $FROM → $TO. Allowed: internal→alpha, alpha→beta, beta→production."; exit 1 ;;
-          esac
+          # Normalise the policy into space-separated "from->to" tokens, so a comma
+          # list, a YAML block scalar and "internal -> alpha" all parse the same.
+          allowed="$(printf '%s' "$ALLOWED" | tr ',\n\t' '   ' | sed 's/ *-> */->/g')"
+          allowed="$(printf '%s' "$allowed" | tr -s ' ' | sed 's/^ //; s/ $//')"
+
+          if [ -z "$allowed" ]; then
+            echo "::error::allowed-promotions is empty — this app permits no promotion at all."
+            exit 1
+          fi
+
+          want="$FROM->$TO"
+          for hop in $allowed; do
+            if [ "$hop" = "$want" ]; then
+              echo "Valid: $FROM → $TO"
+              exit 0
+            fi
+          done
+
+          echo "::error::Invalid promotion path: $FROM → $TO. This app allows: $allowed. Change allowed-promotions in the calling workflow if the app's process really does permit this hop."
+          exit 1
 
       - name: Verify Play credentials are present
         env:
