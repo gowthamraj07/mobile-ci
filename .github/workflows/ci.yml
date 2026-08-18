@@ -8,16 +8,16 @@ name: CI
 # step `if:`, which GitHub rejects as a "workflow file issue"). actionlint catches
 # that class of error (and shellcheck issues) before `v1` ever moves.
 #
-# Flow: `lint` runs on PRs and on pushes to main that touch a workflow. On main,
-# `advance-v1` runs ONLY after `lint` passes and force-moves `v1` to the new commit.
-# So `v1` can only ever point at an actionlint-clean revision — no more manual
-# `git tag -f v1`.
+# Flow: `lint` and `test` run on PRs and on pushes to main that touch a workflow. On
+# main, `advance-v1` runs ONLY after both pass and force-moves `v1` to the new commit.
+# So `v1` can only ever point at a revision that is actionlint-clean AND passes the
+# behavioural tests under tests/ — no more manual `git tag -f v1`.
 on:
   pull_request:
-    paths: [ ".github/workflows/**" ]
+    paths: [ ".github/workflows/**", "tests/**" ]
   push:
     branches: [ main ]
-    paths: [ ".github/workflows/**" ]
+    paths: [ ".github/workflows/**", "tests/**" ]
 
 permissions:
   contents: read
@@ -45,11 +45,36 @@ jobs:
             | tar -xz actionlint
           ./actionlint -color
 
+  # Behavioural tests for logic that must stay INLINE in the reusable workflows
+  # (a reusable workflow's checkout clones the CALLING repo, so it cannot run a
+  # script committed here). The tests lift each step's `run:` block out of the YAML
+  # and exercise it directly — see tests/README.md.
+  test:
+    name: Workflow logic tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+
+      - name: Run tests
+        run: |
+          status=0
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            python3 "$t" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
   # Gate: advance the `v1` tag consumers pin, but only for a workflow change on main
-  # that passed lint. Pushing a tag with GITHUB_TOKEN does not re-trigger workflows.
+  # that passed lint and the tests. Pushing a tag with GITHUB_TOKEN does not
+  # re-trigger workflows.
   advance-v1:
     name: Advance v1 tag
-    needs: lint
+    needs: [lint, test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

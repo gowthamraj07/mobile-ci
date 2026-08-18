@@ -1,0 +1,168 @@
+name: iOS App Store submission (reusable)
+
+# Submit a build that is ALREADY on TestFlight to App Store review, with no rebuild
+# and no re-upload — deliver in `skip_binary_upload` mode simply attaches the chosen
+# TestFlight build to the App Store version and submits it.
+#
+# This is the iOS counterpart of promote.yml, and the asymmetry is real: Android
+# promotion moves an artifact between Play tracks and takes effect in minutes, while
+# TestFlight → App Store is a REVIEW SUBMISSION that Apple gates on a 24–48h human
+# review. What this workflow automates is the submitting, not the shipping. Release
+# to users stays a separate deliberate act (`automatic_release` is the app lane's
+# choice; the fleet default is manual release in App Store Connect after approval).
+#
+# Call it from an app repo:
+#
+#   jobs:
+#     submit-ios:
+#       uses: gowthamraj07/mobile-ci/.github/workflows/submit-ios.yml@v1
+#       with:
+#         version: ${{ inputs.ios-version }}            # blank = latest v* tag
+#         build-number: ${{ inputs.ios-build-number }}  # blank = newest processed
+#       secrets:
+#         APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+#         APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+#         APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+#         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+#
+# CONVENTIONS the app must satisfy:
+#   * an iOS fastlane project under `ios-directory` exposing a `submit` lane that
+#     reads MARKETING_VERSION / BUILD_NUMBER from the environment and calls
+#     upload_to_app_store with skip_binary_upload: true. Override the name with
+#     ios-submit-lane.
+#   * NO match, NO gym, NO signing here — nothing is built, so none of the MATCH_*
+#     secrets are needed. Only the App Store Connect API key is.
+#   * the App Store version must already exist in App Store Connect in "Prepare for
+#     Submission" with its metadata filled in. Apps that keep metadata in git can let
+#     deliver create it; apps that manage the listing by hand (the fleet norm — no
+#     fastlane/metadata directory is committed) create the version in App Store
+#     Connect first, and this workflow attaches the build and submits it.
+on:
+  workflow_call:
+    inputs:
+      ios-directory:
+        description: Directory holding the iOS fastlane project (its Gemfile lives here).
+        type: string
+        default: iosApp
+      ios-submit-lane:
+        description: fastlane lane that submits an existing TestFlight build for review.
+        type: string
+        default: submit
+      ruby-version:
+        type: string
+        default: "3.3"
+      version:
+        description: >-
+          Marketing version (CFBundleShortVersionString) to submit, e.g. "1.2.0".
+          Blank resolves to the newest v* tag in the caller's repo — the tag
+          release.yml pushed for the build now sitting in TestFlight.
+        type: string
+        required: false
+      build-number:
+        description: >-
+          TestFlight build (CFBundleVersion) to attach. Blank lets App Store Connect
+          use the newest processed build for that version.
+        type: string
+        required: false
+    secrets:
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: false
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID:
+        required: false
+      APP_STORE_CONNECT_API_KEY_P8:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+
+jobs:
+  submit:
+    name: TestFlight → App Store review
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      # Full history + tags: the version fallback below reads the newest v* tag.
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Fail loud and early rather than letting fastlane fall through to an Apple ID
+      # login prompt it can never answer on a runner.
+      - name: Verify App Store Connect credentials are present
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for v in APP_STORE_CONNECT_API_KEY_ID APP_STORE_CONNECT_API_KEY_ISSUER_ID \
+                   APP_STORE_CONNECT_API_KEY_P8 APPLE_TEAM_ID; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing App Store Connect secrets:$missing. See SECRETS.md — submission needs the API key only, not the MATCH_* signing secrets."
+            exit 1
+          fi
+          echo "App Store Connect API key present."
+
+      - name: Resolve version and build
+        id: target
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BUILD: ${{ inputs.build-number }}
+        run: |
+          version="$(printf '%s' "$INPUT_VERSION" | tr -d '[:space:]')"
+          if [ -z "$version" ]; then
+            # Newest v* tag, version-sorted — the tag release.yml pushed for the
+            # build under test. `git tag --sort=-v:refname` puts 1.10.0 above 1.9.0.
+            tag="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+            version="${tag#v}"
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::No version given and no v* tag in this repo — pass the version input explicitly."
+            exit 1
+          fi
+
+          build="$(printf '%s' "$INPUT_BUILD" | tr -d '[:space:]')"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Submitting version $version, build ${build:-<newest processed>}"
+
+      - name: Set up Ruby + bundler
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: ${{ inputs.ruby-version }}
+          bundler-cache: true
+          working-directory: ${{ inputs.ios-directory }}
+
+      # Submit lane: deliver with skip_binary_upload. No match, no gym, no .ipa.
+      - name: fastlane ios submit (deliver)
+        working-directory: ${{ inputs.ios-directory }}
+        env:
+          CI: "true"
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MARKETING_VERSION: ${{ steps.target.outputs.version }}
+          BUILD_NUMBER: ${{ steps.target.outputs.build }}
+        run: bundle exec fastlane ios ${{ inputs.ios-submit-lane }}
+
+      - name: Summarise
+        if: success()
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+          BUILD: ${{ steps.target.outputs.build }}
+        run: |
+          {
+            echo "### Submitted to App Store review"
+            echo ""
+            echo "- version: \`$VERSION\`"
+            echo "- build: \`${BUILD:-newest processed}\`"
+            echo ""
+            echo "Apple review takes 24–48h. Release to users is still a manual step in App Store Connect once approved."
+          } >> "$GITHUB_STEP_SUMMARY"
