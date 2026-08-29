@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Pinned actionlint binary (avoids a third-party action in the trust path).
       # shellcheck is preinstalled on ubuntu-latest, so its integration runs too.
@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install PyYAML
         run: python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
@@ -81,7 +81,7 @@ jobs:
       contents: write   # force-update the v1 tag
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Move v1 to this commit
         run: |
