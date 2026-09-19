@@ -84,7 +84,7 @@ jobs:
     steps:
       # Full history + tags: the version fallback below reads the newest v* tag.
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -133,7 +133,7 @@ jobs:
           echo "Submitting version $version, build ${build:-<newest processed>}"
 
       - name: Set up Ruby + bundler
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1
         with:
           ruby-version: ${{ inputs.ruby-version }}
           bundler-cache: true
