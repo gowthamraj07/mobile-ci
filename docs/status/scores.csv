@@ -1,0 +1,11 @@
+date,module,axis,score,reqs,bugs,gaps
+2026-10-22,pr-check build gate,V,85,8,2,1
+2026-10-22,Per-app configurability,V,80,7,1,1
+2026-10-22,release DAG (build-before-tag),S,70,8,4,2
+2026-10-22,Version and versionCode derivation,S,65,5,3,2
+2026-10-22,Android signing and Play publish,S,80,6,2,1
+2026-10-22,iOS signing and TestFlight (match),S,65,8,3,2
+2026-10-22,Play store operations (promote + sync-listing),S,75,6,3,1
+2026-10-22,Secret contract and cross-owner forwarding,F,70,5,1,2
+2026-10-22,v1 release train and self-check,F,65,5,2,3
+2026-10-22,Repo housekeeping (cleanup),F,80,3,2,0
