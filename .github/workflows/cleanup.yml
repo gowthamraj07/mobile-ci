@@ -33,8 +33,23 @@ on:
         type: string
         default: ""
       container-min-versions-to-keep:
+        description: >-
+          How many of the newest TAGGED images to keep. Counted in images, not
+          in GitHub package versions, so this is a real number of releases.
         type: number
         default: 10
+      container-exclude-tags:
+        description: >-
+          Comma-separated tags never deleted, whatever their age. Wildcards
+          allowed.
+        type: string
+        default: "latest,main,master,develop,staging,production"
+      container-dry-run:
+        description: >-
+          Log what would be deleted and delete nothing. Use it from
+          workflow_dispatch before trusting a change to the keep rules.
+        type: boolean
+        default: false
 
 jobs:
   runs:
@@ -51,6 +66,24 @@ jobs:
           retain_days: ${{ inputs.retain-days }}
           keep_minimum_runs: ${{ inputs.keep-minimum-runs }}
 
+  # Why this job is not `actions/delete-package-versions` any more.
+  #
+  # A buildx multi-arch publish creates THREE GitHub package versions per build:
+  # the manifest list that carries the tag, plus one untagged child manifest per
+  # architecture. actions/delete-package-versions counts package versions and
+  # knows nothing about manifest lists, which broke this two ways on DriveSmart
+  # (verified 2026-11-01, run 41266470229):
+  #
+  #   * `min-versions-to-keep: 10` counted versions, not releases -- about three
+  #     publishes of history -- and `ignore-versions` protected only moving tags
+  #     like `latest`, so version tags 1.0.7 through 1.0.12 were all deleted
+  #     within hours of 1.0.13 being published. The digests behind them now
+  #     answer `manifest unknown`: there was no rollback image left.
+  #   * the untagged step treated per-arch children as garbage, so it could
+  #     delete the platform manifests out from under a tag it had just decided
+  #     to keep, leaving a tag that resolves but cannot be pulled.
+  #
+  # The replacement reasons in images rather than package versions.
   containers:
     name: Prune old container images
     if: ${{ inputs.container-package != '' }}
@@ -58,21 +91,26 @@ jobs:
     permissions:
       packages: write
     steps:
-      - name: Delete untagged container images (keep 5)
-        uses: actions/delete-package-versions@25ad4af5be03aef10e0b3376b248688b7a44c40b # v5
+      # Multi-arch aware, which actions/delete-package-versions is not. See the
+      # note above the job for what that cost us.
+      - name: Prune old container images
+        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
         with:
-          package-name: ${{ inputs.container-package }}
-          package-type: container
-          delete-only-untagged-versions: true
-          min-versions-to-keep: 5
+          package: ${{ inputs.container-package }}
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Delete old container images (keep minimum)
-        uses: actions/delete-package-versions@25ad4af5be03aef10e0b3376b248688b7a44c40b # v5
-        with:
-          package-name: ${{ inputs.container-package }}
-          package-type: container
-          delete-only-untagged-versions: false
-          min-versions-to-keep: ${{ inputs.container-min-versions-to-keep }}
-          ignore-versions: "^(latest|main|master|develop|staging|production)$"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          keep-n-tagged: ${{ inputs.container-min-versions-to-keep }}
+          exclude-tags: ${{ inputs.container-exclude-tags }}
+          # Deliberately NOT pruning untagged images. A multi-arch publish's
+          # per-arch children are untagged by design, and this action's docs do
+          # not actually promise that children of a KEPT image are excluded from
+          # `keep-n-untagged` -- they recommend verifying with a dry run. Rather
+          # than depend on an unverified guarantee to protect live images, the
+          # untagged rules stay off: deleting a tagged image here cascades to its
+          # own children correctly, which is the only deletion we want.
+          delete-untagged: false
+          # Safe regardless: these are multi-arch images whose platform images
+          # are ALL already missing, i.e. unpullable wreckage, most of it left
+          # behind by the action this step replaces.
+          delete-ghost-images: true
+          validate: true
+          dry-run: ${{ inputs.container-dry-run }}
