@@ -81,7 +81,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Only allow the hops this app declared; reject everything else.
       - name: Validate promotion path
@@ -123,7 +123,7 @@ jobs:
           fi
 
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ inputs.java-version }}
