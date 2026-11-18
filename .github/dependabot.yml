@@ -7,5 +7,16 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # Two groups, not one. Merging here is the fleet's deploy trigger: ci.yml's
+      # `advance-v1` job force-moves the v1 tag that every app pins, so a bump
+      # that lands here reaches every app's CI with no further human step --
+      # gated only by actionlint and one Python test, since the reusable
+      # workflows are never executed on a PR. Majors therefore have to be read,
+      # not skimmed. A single patterns: ["*"] group made that impossible: PR #11
+      # was ten bumps including four majors and a two-major checkout jump.
       actions:
         patterns: [ "*" ]
+        update-types: [ "minor", "patch" ]
+      actions-major:
+        patterns: [ "*" ]
+        update-types: [ "major" ]
