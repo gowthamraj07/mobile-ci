@@ -84,7 +84,7 @@ jobs:
     steps:
       # Full history + tags: the version fallback below reads the newest v* tag.
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
